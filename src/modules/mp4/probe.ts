@@ -7,6 +7,10 @@ import {
   BoxTKHD,
   MetaDataMp4,
   BoxTrack,
+  BoxMDIA,
+  BoxHDLR,
+  BoxMINF,
+  BoxSTBL,
 } from './types'
 import { toDecimal } from '../common/math'
 
@@ -23,6 +27,7 @@ export function probe_mp4(filepath: string): MetaDataMp4 {
   const fd = fs.openSync(filepath, 'r')
   let pos = 0
   const buffer = Buffer.alloc(4)
+  let isVideo = false
 
   function read_box_ftyp(): BoxFTYP {
     const box: BoxFTYP = {
@@ -61,10 +66,11 @@ export function probe_mp4(filepath: string): MetaDataMp4 {
     box.type = type
 
     box.mvhd = read_box_mvhd()
-    // @DEV
-    // while (pos < fileSize) {
-    box.tracks.push(read_box_track())
-    // }
+
+    const movEndPos = pos + (box.size - 8) - box.mvhd.size
+    while (pos < movEndPos) {
+      box.tracks.push(read_next_box('trak'))
+    }
     return box
   }
 
@@ -118,17 +124,42 @@ export function probe_mp4(filepath: string): MetaDataMp4 {
     return box
   }
 
-  function read_box_track(): BoxTrack {
-    const track: BoxTrack = {
-      size: 0,
-      type: '',
+  function read_next_box(targetType: string): any {
+    if (pos >= fileSize) {
+      throw new Error(`[read_next_box] EOF`)
     }
 
-    const { size, type } = read_box_size_and_type()
-    track.size = size
-    track.type = type
+    const box = read_box_size_and_type()
+    if (box.type !== targetType) {
+      // size and type already take 8 bytes
+      pos += box.size - 8
+      return read_next_box(targetType)
+    } else {
+      if (targetType === 'trak') {
+        return read_next_box_track(box)
+      } else if (targetType === 'mdia') {
+        return read_next_box_mdia(box)
+      } else if (targetType === 'hdlr') {
+        return read_next_box_hdlr(box)
+      } else if (targetType === 'minf') {
+        return read_next_box_minf(box)
+      } else if (targetType === 'stbl') {
+        return read_next_box_stbl(box)
+      }
+      return box
+    }
+  }
+
+  function read_next_box_track(sat: Box): BoxTrack {
+    const track: BoxTrack = {
+      ...sat,
+    }
+    const posAfterTrack = pos + sat.size - 8
 
     track.tkhd = read_box_tkhd()
+    track.mdia = read_next_box('mdia')
+
+    pos = posAfterTrack
 
     return track
   }
@@ -193,6 +224,155 @@ export function probe_mp4(filepath: string): MetaDataMp4 {
     return box
   }
 
+  function read_next_box_mdia(sat: Box): BoxMDIA {
+    const box: BoxMDIA = { ...sat }
+
+    box.hdlr = read_next_box('hdlr')
+    box.minf = read_next_box('minf')
+
+    return box
+  }
+
+  function read_next_box_hdlr(sat: Box): BoxHDLR {
+    const box: BoxHDLR = {
+      ...sat,
+      version: 0,
+      handlerType: '',
+      name: '',
+    }
+
+    // version
+    const version = read_int(1)
+    if (version !== 0 && version !== 1) {
+      throw new Error(`invalid version: ${version}`)
+    } else if (version === 1) {
+      throw new Error('version 1 not supported')
+    }
+    // flags
+    pos += 3
+    // pre defined
+    pos += 4
+    // handler type
+    box.handlerType = read_str()
+    // @FIX
+    // set global isVideo to let other read_box funcs
+    // know we are parsing video info now
+    if (box.handlerType === 'vide') isVideo = true
+    else isVideo = false
+    // reserved
+    pos += 12
+    // name
+    box.name = read_long_str(box.size - 32)
+
+    return box
+  }
+
+  function read_next_box_minf(sat: Box): BoxMINF {
+    const box: BoxMINF = {
+      ...sat,
+    }
+
+    box.stbl = read_next_box('stbl')
+
+    return box
+  }
+
+  function read_next_box_stbl(sat: Box): BoxSTBL {
+    const box: BoxSTBL = {
+      ...sat,
+    }
+
+    if (isVideo) {
+      /**
+       * stsd
+       */
+      box.stsd = read_box_size_and_type()
+      // version
+      box.stsd.version = read_int(1)
+      // flags
+      pos += 3
+      // number of entries
+      box.stsd.entryNum = read_int()
+      // entries
+      box.stsd.entries = []
+      for (let i = 0; i < box.stsd.entryNum; i++) {
+        const entry: any = {}
+        // size
+        entry.size = read_int()
+        // format
+        entry.format = read_str()
+        if (entry.format !== 'avc1') {
+          throw new Error('only know avc1')
+        }
+        // reserved
+        pos += 6
+        // data reference index
+        entry.dataRefIndex = read_int(2)
+        // version
+        entry.version = read_int(2)
+        // revision level
+        entry.revisionLevel = read_int(2)
+        // vendor
+        entry.vendor = read_int()
+        // temporal quality
+        entry.temporalQuality = read_int()
+        // spatial quality
+        entry.spatialQuality = read_int()
+        // width
+        entry.width = read_int(2)
+        // height
+        entry.height = read_int(2)
+        // horizontal resolution
+        entry.resolutionHor = read_int(2) + toDecimal(read_int(2))
+        // vertical resolution
+        entry.resolutionVer = read_int(2) + toDecimal(read_int(2))
+        // data size
+        entry.dataSize = read_int()
+        // frame count
+        entry.frameCount = read_int(2)
+        // compressor name
+        entry.compressorName = read_int()
+        // @FIX unknown 28 bytes
+        pos += 28
+        // depth
+        entry.depth = read_int(2)
+        // pre defined
+        pos += 2
+        /**
+         * avc config
+         */
+        const config: any = {}
+        entry.config = config
+        // size
+        config.size = read_int()
+        const posAfterAvcConfig = pos + config.size - 4
+        // type
+        config.type = read_str()
+        // version
+        config.version = read_int(1)
+        // profile
+        // 66 => Baseline
+        config.profile = read_int(1)
+        // profile compatibility
+        pos += 1
+        // level
+        config.level = read_int(1)
+        // skip all after
+        pos = posAfterAvcConfig
+
+        box.stsd.entries.push(entry)
+      }
+    } else {
+      // skip audio stbl
+      pos += sat.size - 8
+    }
+
+    return box
+  }
+
+  /**
+   * Utils
+   */
   function read_str(): string {
     fs.readSync(fd, buffer, 0, 4, pos)
     pos += 4
@@ -210,6 +390,14 @@ export function probe_mp4(filepath: string): MetaDataMp4 {
     const type = read_str()
 
     return { size, type }
+  }
+  function read_long_str(len: number): string {
+    let tmpBuffer: Buffer | null = Buffer.alloc(len)
+    fs.readSync(fd, tmpBuffer, 0, len, pos)
+    pos += len
+    const str = tmpBuffer.toString('utf-8')
+    tmpBuffer = null
+    return str
   }
 
   metadata.ftyp = read_box_ftyp()

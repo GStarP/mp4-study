@@ -35,6 +35,7 @@ export interface BoxMVHD extends Box {
 
 export interface BoxTrack extends Box {
   tkhd?: BoxTKHD
+  mdia?: BoxMDIA
 }
 export interface BoxTKHD extends Box {
   version: 0 | 1
@@ -48,4 +49,22 @@ export interface BoxTKHD extends Box {
   volume: number
   width: number
   height: number
+}
+
+export interface BoxMDIA extends Box {
+  hdlr?: BoxHDLR
+  minf?: BoxMINF
+}
+
+export interface BoxHDLR extends Box {
+  version: 0 | 1
+  handlerType: string
+  name: string
+}
+export interface BoxMINF extends Box {
+  stbl?: BoxSTBL
+}
+
+export interface BoxSTBL extends Box {
+  [k: string]: any
 }

@@ -1,3 +1,15 @@
 {
-  "cSpell.words": ["FTYP", "MOOV", "MVHD", "TKHD"]
+  "cSpell.words": [
+    "edts",
+    "FTYP",
+    "HDLR",
+    "MDIA",
+    "MINF",
+    "MOOV",
+    "MVHD",
+    "STBL",
+    "stsd",
+    "TKHD",
+    "trak"
+  ]
 }
